@@ -1,0 +1,184 @@
+Option Explicit
+
+Sub UpdateDealerVerification()
+    On Error GoTo ErrHandler
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    Dim wb As Workbook: Set wb = ThisWorkbook
+    Dim wsPM As Worksheet, wsDV As Worksheet, wsPBI As Worksheet
+    Set wsPM = wb.Worksheets("Payment Manager Reporting")
+    Set wsDV = wb.Worksheets("Dealer Verification")
+    Set wsPBI = wb.Worksheets("Dealer Check PBI")
+
+    ' --- headers/columns discovery ---
+    Dim hdrRowPM As Long, hdrRowDV As Long, hdrRowPBI As Long
+    hdrRowPM = FindHeaderRow(wsPM, Array("ACCOUNT_ID", "PORTFOLIO_PRODUCTS_CREATED_AT", "DEALER_NAME"))
+    hdrRowDV = FindHeaderRow(wsDV, Array("Dealer", "Loan #", "Date Loan Approved", "DV Complete", "Loan Funded", "Notes"))
+    hdrRowPBI = FindHeaderRow(wsPBI, Array("NAME", "DEALER_STATUS", "FUNDING_METHOD_REASON"))
+    If hdrRowPM = 0 Or hdrRowDV = 0 Or hdrRowPBI = 0 Then
+        MsgBox "Couldn't find required headers on one of the sheets.", vbExclamation
+        GoTo Cleanup
+    End If
+
+    Dim colPM_ACCOUNT_ID As Long, colPM_PORT_CREATED As Long, colPM_DEALER_NAME As Long
+    colPM_ACCOUNT_ID = FindCol(wsPM, hdrRowPM, "ACCOUNT_ID")
+    colPM_PORT_CREATED = FindCol(wsPM, hdrRowPM, "PORTFOLIO_PRODUCTS_CREATED_AT")
+    colPM_DEALER_NAME = FindCol(wsPM, hdrRowPM, "DEALER_NAME")
+
+    Dim colDV_Dealer As Long, colDV_LoanNum As Long, colDV_DateApproved As Long
+    Dim colDV_DVComplete As Long, colDV_LoanFunded As Long, colDV_Notes As Long
+    colDV_Dealer = FindCol(wsDV, hdrRowDV, "Dealer")
+    colDV_LoanNum = FindCol(wsDV, hdrRowDV, "Loan #")
+    colDV_DateApproved = FindCol(wsDV, hdrRowDV, "Date Loan Approved")
+    colDV_DVComplete = FindCol(wsDV, hdrRowDV, "DV Complete")
+    colDV_LoanFunded = FindCol(wsDV, hdrRowDV, "Loan Funded")
+    colDV_Notes = FindCol(wsDV, hdrRowDV, "Notes")
+
+    Dim colPBI_NAME As Long, colPBI_STATUS As Long, colPBI_REASON As Long
+    colPBI_NAME = FindCol(wsPBI, hdrRowPBI, "NAME")
+    colPBI_STATUS = FindCol(wsPBI, hdrRowPBI, "DEALER_STATUS")
+    colPBI_REASON = FindCol(wsPBI, hdrRowPBI, "FUNDING_METHOD_REASON")
+
+    ' --- previous business day (no holidays) ---
+    Dim prevBizDay As Date
+    prevBizDay = Application.WorksheetFunction.WorkDay(Date, -1)
+
+    ' --- delete Payment Manager Reporting rows not matching prev biz day ---
+    Dim lastRowPM As Long, r As Long
+    lastRowPM = wsPM.Cells(wsPM.Rows.Count, colPM_ACCOUNT_ID).End(xlUp).Row
+    For r = lastRowPM To hdrRowPM + 1 Step -1
+        Dim valDate As Variant
+        valDate = wsPM.Cells(r, colPM_PORT_CREATED).Value
+        If IsDate(valDate) Then
+            If DateValue(CDate(valDate)) <> prevBizDay Then wsPM.Rows(r).Delete
+        Else
+            wsPM.Rows(r).Delete
+        End If
+    Next r
+
+    ' --- append remaining PM rows to Dealer Verification ---
+    lastRowPM = wsPM.Cells(wsPM.Rows.Count, colPM_ACCOUNT_ID).End(xlUp).Row
+    Dim destRow As Long
+    destRow = wsDV.Cells(wsDV.Rows.Count, colDV_Dealer).End(xlUp).Row
+    If destRow < hdrRowDV Then destRow = hdrRowDV
+    Dim firstNewRow As Long: firstNewRow = destRow + 1
+
+    Dim rowsAdded As Long: rowsAdded = 0
+    Dim pmRow As Long
+    For pmRow = hdrRowPM + 1 To lastRowPM
+        destRow = destRow + 1
+        rowsAdded = rowsAdded + 1
+        wsDV.Cells(destRow, colDV_Dealer).Value = wsPM.Cells(pmRow, colPM_DEALER_NAME).Value
+        wsDV.Cells(destRow, colDV_LoanNum).Value = wsPM.Cells(pmRow, colPM_ACCOUNT_ID).Value
+        If IsDate(wsPM.Cells(pmRow, colPM_PORT_CREATED).Value) Then
+            wsDV.Cells(destRow, colDV_DateApproved).Value = DateValue(CDate(wsPM.Cells(pmRow, colPM_PORT_CREATED).Value))
+        Else
+            wsDV.Cells(destRow, colDV_DateApproved).Value = wsPM.Cells(pmRow, colPM_PORT_CREATED).Value
+        End If
+        wsDV.Cells(destRow, colDV_Notes).Value = ""
+        ' DV Complete and Loan Funded cells left empty; no checkboxes created
+    Next pmRow
+
+    ' format date column
+    If colDV_DateApproved > 0 Then wsDV.Columns(colDV_DateApproved).NumberFormat = "mm/dd/yyyy"
+
+    ' --- populate Notes for unfunded loans ---
+    Dim lastRowDV As Long, dvRow As Long
+    lastRowDV = wsDV.Cells(wsDV.Rows.Count, colDV_Dealer).End(xlUp).Row
+    For dvRow = hdrRowDV + 1 To lastRowDV
+        Dim loanFundedVal As Variant
+        loanFundedVal = wsDV.Cells(dvRow, colDV_LoanFunded).Value
+        If IsLoanFundedFalse(loanFundedVal) Then
+            Dim dealerName As String
+            dealerName = Trim(CStr(wsDV.Cells(dvRow, colDV_Dealer).Value))
+            If Len(dealerName) > 0 Then
+                Dim foundReason As String
+                foundReason = FindFundingReason(wsPBI, hdrRowPBI, colPBI_NAME, colPBI_STATUS, colPBI_REASON, dealerName)
+                If Len(foundReason) > 0 Then wsDV.Cells(dvRow, colDV_Notes).Value = foundReason
+            End If
+        End If
+    Next dvRow
+
+    ' --- Filter Dealer Verification to show only Loan Funded = FALSE or blanks ---
+    If colDV_LoanFunded > 0 Then
+        If wsDV.AutoFilterMode Then wsDV.AutoFilterMode = False
+        Dim firstCol As Long: firstCol = 1
+        Dim afRange As Range
+        Set afRange = wsDV.Range(wsDV.Cells(hdrRowDV, firstCol), wsDV.Cells(lastRowDV, wsDV.Columns.Count))
+        
+        ' Filter for FALSE or blank
+        afRange.AutoFilter Field:=(colDV_LoanFunded - firstCol + 1), _
+                           Criteria1:=Array("FALSE", ""), Operator:=xlFilterValues
+    End If
+
+    MsgBox "Done. Added " & rowsAdded & " new rows. Checkboxes were not created, Notes populated for un-funded rows, and filtered Loan Funded = FALSE or blanks.", vbInformation
+
+Cleanup:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
+
+' ---------------- Helper routines ----------------
+
+' Returns True when the Loan Funded cell should be treated as NOT funded (FALSE/empty/unchecked)
+Private Function IsLoanFundedFalse(v As Variant) As Boolean
+    If IsEmpty(v) Then
+        IsLoanFundedFalse = True
+        Exit Function
+    End If
+    If VarType(v) = vbBoolean Then
+        IsLoanFundedFalse = (v = False)
+        Exit Function
+    End If
+    Dim s As String: s = LCase(Trim(CStr(v)))
+    If s = "" Or s = "false" Or s = "0" Then
+        IsLoanFundedFalse = True
+    Else
+        IsLoanFundedFalse = False
+    End If
+End Function
+
+' header/column helpers
+Private Function FindHeaderRow(ws As Worksheet, headerNames As Variant) As Long
+    Dim r As Long, need As Variant, c As Range, found As Long
+    For r = 1 To 40
+        found = 0
+        For Each need In headerNames
+            Set c = ws.Rows(r).Find(What:=CStr(need), LookAt:=xlWhole, LookIn:=xlValues, MatchCase:=False)
+            If Not c Is Nothing Then found = found + 1
+        Next need
+        If found > 0 Then
+            FindHeaderRow = r
+            Exit Function
+        End If
+    Next r
+    FindHeaderRow = 0
+End Function
+
+Private Function FindCol(ws As Worksheet, hdrRow As Long, headerName As String) As Long
+    Dim c As Range
+    If hdrRow = 0 Then Exit Function
+    Set c = ws.Rows(hdrRow).Find(What:=headerName, LookAt:=xlWhole, LookIn:=xlValues, MatchCase:=False)
+    If Not c Is Nothing Then FindCol = c.Column
+End Function
+
+Private Function FindFundingReason(ws As Worksheet, hdrRow As Long, colName As Long, colStatus As Long, colReason As Long, dealerToFind As String) As String
+    Dim lastRow As Long, r As Long
+    lastRow = ws.Cells(ws.Rows.Count, colName).End(xlUp).Row
+    For r = hdrRow + 1 To lastRow
+        If LCase(Trim(CStr(ws.Cells(r, colName).Value))) = LCase(Trim(dealerToFind)) Then
+            If LCase(Trim(CStr(ws.Cells(r, colStatus).Value))) = "active" Then
+                FindFundingReason = CStr(ws.Cells(r, colReason).Value)
+                Exit Function
+            End If
+        End If
+    Next r
+    FindFundingReason = ""
+End Function
+

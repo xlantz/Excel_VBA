@@ -1,0 +1,36 @@
+Sub GenerateAuctionProceedsStrings()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim gross As String, net As String, auctDate As String
+    Dim sell As String, recon As String, auctionHouse As String
+    Dim result As String
+    
+    ' Use active sheet or specify: Set ws = ThisWorkbook.Sheets("Sheet1")
+    Set ws = ActiveSheet
+    
+    ' Find the last row with data in column A (Loan #)
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    
+    ' Loop through each row starting from row 2
+    For i = 2 To lastRow
+        gross = Trim(ws.Cells(i, 2).Text)          ' Column B
+        net = Trim(ws.Cells(i, 3).Text)            ' Column C
+        sell = Trim(ws.Cells(i, 5).Text)           ' Column E
+        recon = Trim(ws.Cells(i, 6).Text)          ' Column F
+        auctionHouse = Trim(ws.Cells(i, 8).Text)   ' Column H
+        auctDate = Trim(ws.Cells(i, 9).Text)       ' Column I
+        
+        ' Format result string
+        result = "Received AUCT proceeds from " & auctionHouse & " on " & auctDate & vbCrLf & _
+                 "Gross: " & gross & vbCrLf & _
+                 "Recon: " & recon & vbCrLf & _
+                 "Sell: " & sell & vbCrLf & _
+                 "Net: " & net
+        
+        ' Output in Column J
+        ws.Cells(i, 10).Value = result
+    Next i
+
+    MsgBox "Auction proceeds strings generated in Column J.", vbInformation
+End Sub
