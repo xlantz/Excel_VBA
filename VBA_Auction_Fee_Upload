@@ -1,0 +1,62 @@
+Sub BuildFeeUploadSheet()
+    Dim wsSource As Worksheet
+    Dim wsNew As Worksheet
+    Dim lastRow As Long
+    Dim newSheetName As String
+    Dim today As String
+    Dim nextRow As Long
+    Dim i As Long
+    
+    ' Format today's date as mm.dd.yy
+    today = Format(Date, "mm.dd.yy")
+    newSheetName = today & " Fee Upload"
+    
+    ' Try to find the source sheet (named exactly by today's date)
+    On Error Resume Next
+    Set wsSource = ThisWorkbook.Sheets(today)
+    On Error GoTo 0
+    
+    If wsSource Is Nothing Then
+        MsgBox "No sheet exists with today's date (" & today & ").", vbCritical
+        Exit Sub
+    End If
+    
+    ' Create the new sheet at the end
+    Set wsNew = ThisWorkbook.Sheets.Add(After:=Sheets(Sheets.Count))
+    wsNew.Name = newSheetName
+    
+    ' Create headers
+    wsNew.Range("A1:F1").Value = Array("Account Number", "Fee Type", "Invoice Number", "Amount", "Effective Date", "Note")
+    
+    ' Find last row on the source sheet
+    lastRow = wsSource.Cells(wsSource.Rows.Count, "A").End(xlUp).Row
+    
+    nextRow = 2 ' start on row 2 (skip headers)
+    
+    ' Loop through source sheet starting at row 2
+    For i = 2 To lastRow
+        
+        ' A:A → A (Account Number)
+        wsNew.Cells(nextRow, "A").Value = wsSource.Cells(i, "A").Value
+        
+        ' B = constant AUCT_FEE
+        wsNew.Cells(nextRow, "B").Value = "AUCT_FEE"
+        
+        ' G:C → C (Invoice Number)
+        wsNew.Cells(nextRow, "C").Value = wsSource.Cells(i, "G").Value
+        
+        ' D:D → D (Amount)
+        wsNew.Cells(nextRow, "D").Value = wsSource.Cells(i, "D").Value
+        
+        ' I:E → E (Effective Date)
+        wsNew.Cells(nextRow, "E").Value = wsSource.Cells(i, "I").Value
+        
+        ' F = "Auction Fee from (col H) for $(col D)"
+        wsNew.Cells(nextRow, "F").Value = "Auction Fee from " & wsSource.Cells(i, "H").Value & _
+                                          " for $" & wsSource.Cells(i, "D").Value
+        
+        nextRow = nextRow + 1
+    Next i
+    
+    MsgBox "Fee upload sheet created: " & newSheetName, vbInformation
+End Sub
