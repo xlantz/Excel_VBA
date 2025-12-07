@@ -1,0 +1,175 @@
+Option Explicit
+
+Sub BuildJournalSheet()
+    Dim wsSrc As Worksheet
+    Dim wsJ As Worksheet
+    Dim lastRow As Long, i As Long
+    Dim dict As Object
+    Dim key As Variant
+    Dim batchKey As String
+    Dim outRow As Long
+    Dim todayName As String, dateStamp As String
+    
+    dateStamp = Format(Date, "mm.dd.yy")
+    todayName = dateStamp & " Journal"
+    
+    Set wsSrc = ActiveSheet
+    
+    '--- delete journal sheet if exists ---
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Worksheets(todayName).Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+    
+    '--- create journal sheet ---
+    Set wsJ = Worksheets.Add(After:=Worksheets(Worksheets.Count))
+    wsJ.Name = todayName
+    
+    '--- headers ---
+    wsJ.Range("A1:P1").Value = Array( _
+        "Company", "Account", "Department", "Location", "Intercompany", _
+        "Future", "Currency", "Entered Debit", "Entered Credit", _
+        "Conversion Date", "Conversion Rate Type", "Conversion Rate", _
+        "Accounted Debit", "Accounted Credit", "Line Description", "Batch Name")
+    
+    '--- dictionary to group batches by Auction House ---
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "A").End(xlUp).Row
+    
+    '--- build dictionary of batches ---
+    For i = 2 To lastRow
+        batchKey = Trim(wsSrc.Cells(i, "H").Value) ' Auction House
+        
+        If Not dict.Exists(batchKey) Then
+            dict.Add batchKey, Array(0#, 0#, 0#)  ' Gross, Net, Auct
+        End If
+        
+        Dim a
+        a = dict(batchKey)
+        
+        a(0) = a(0) + Nz(wsSrc.Cells(i, "B").Value) ' Gross
+        a(1) = a(1) + Nz(wsSrc.Cells(i, "C").Value) ' Net
+        a(2) = a(2) + Nz(wsSrc.Cells(i, "D").Value) ' Auct
+        
+        dict(batchKey) = a
+    Next i
+    
+    outRow = 2
+    
+    '--- write batches BEFORE batch naming ---
+    For Each key In dict.Keys
+        Dim bt, gross#, net#, auct#
+        
+        bt = dict(key)
+        gross = bt(0)
+        net = bt(1)
+        auct = bt(2)
+        
+        ' Row 1: NET (Debit)
+        wsJ.Cells(outRow, 1).Resize(1, 16).Value = Array( _
+            606, 10032, 970, 0, 0, 0, "USD", _
+            net, "", "", "", "", "", "", key, "")
+        outRow = outRow + 1
+        
+        ' Row 2: GROSS (Credit)
+        wsJ.Cells(outRow, 1).Resize(1, 16).Value = Array( _
+            606, 11901, 970, 0, 0, 0, "USD", _
+            "", gross, "", "", "", "", "", key, "")
+        outRow = outRow + 1
+        
+        ' Row 3: AUCT (Debit)
+        wsJ.Cells(outRow, 1).Resize(1, 16).Value = Array( _
+            606, 83802, 970, 0, 0, 0, "USD", _
+            auct, "", "", "", "", "", "", key, "")
+        outRow = outRow + 1
+        
+        ' gap (kept for structure; will be cleaned later)
+        outRow = outRow + 2
+    Next key
+    
+    
+    '===========================================================
+    '   DELETE ROWS WITH ZERO DEBIT AND ZERO CREDIT
+    '===========================================================
+    lastRow = wsJ.Cells(wsJ.Rows.Count, "A").End(xlUp).Row
+    
+    For i = lastRow To 2 Step -1
+        Dim debitVal, creditVal
+        debitVal = Nz(wsJ.Cells(i, "H").Value)
+        creditVal = Nz(wsJ.Cells(i, "I").Value)
+        
+        If debitVal = 0 And creditVal = 0 Then
+            wsJ.Rows(i).Delete
+        End If
+    Next i
+    
+    
+    '===========================================================
+    '   APPLY BATCH NAMES
+    '===========================================================
+    Dim batchCount As Long: batchCount = 0
+    Dim batchName As String
+    Dim lastDescription As String
+    
+    lastRow = wsJ.Cells(wsJ.Rows.Count, "A").End(xlUp).Row
+    
+    For i = 2 To lastRow
+        Dim description As String
+        description = Trim(wsJ.Cells(i, "O").Value)
+        
+        ' New batch = change in Auction House
+        If description <> lastDescription Then
+            batchCount = batchCount + 1
+            
+            If batchCount = 1 Then
+                batchName = "Auction Proceeds " & dateStamp
+            Else
+                batchName = "Auction Proceeds " & dateStamp & " - " & batchCount
+            End If
+            
+            lastDescription = description
+        End If
+        
+        wsJ.Cells(i, "P").Value = batchName
+    Next i
+    
+    
+    '===========================================================
+    '   INSERT ONE BLANK ROW AFTER EACH BATCH
+    '===========================================================
+    lastRow = wsJ.Cells(wsJ.Rows.Count, "A").End(xlUp).Row
+    lastDescription = ""
+    
+    For i = lastRow To 2 Step -1
+        Dim descCurrent As String, descAbove As String
+        descCurrent = Trim(wsJ.Cells(i, "O").Value)
+        descAbove = Trim(wsJ.Cells(i - 1, "O").Value)
+        
+        If descAbove <> descCurrent Then
+            ' End of batch → insert blank row below row i
+            wsJ.Rows(i + 1).Insert
+        End If
+    Next i
+    
+    
+    '===========================================================
+    '   FORMATTING
+    '===========================================================
+    wsJ.Columns("A").NumberFormat = "0"
+    wsJ.Columns("B").NumberFormat = "0"
+    wsJ.Columns("C").NumberFormat = "0"
+    wsJ.Columns("D").NumberFormat = "000"
+    wsJ.Columns("E").NumberFormat = "000"
+    wsJ.Columns("F").NumberFormat = "0000"
+    wsJ.Columns("H:I").NumberFormat = "#,##0.00"
+    wsJ.Columns.AutoFit
+    
+    MsgBox "Journal sheet created successfully: " & todayName
+End Sub
+
+
+Private Function Nz(v)
+    If IsEmpty(v) Or v = "" Or IsNull(v) Then Nz = 0 Else Nz = v
+End Function
